@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 CYCLES = 144
-REFRESH_PAGE_CYCLES = 12
+REFRESH_PAGE_CYCLES = 3
 
 DELAY = 30  # timeout for page load
 
@@ -54,6 +54,7 @@ class DocType(str, Enum):
 
 
 class OperationType(str, Enum):
+    AUTORIZACION_TEMP_EXCEPCIONALES_ARRAIGO = 10
     AUTORIZACION_DE_REGRESO = "20"  # POLICIA-AUTORIZACIÓN DE REGRESO
     BREXIT = "4094"  # POLICÍA-EXP.TARJETA ASOCIADA AL ACUERDO DE RETIRADA CIUDADANOS BRITÁNICOS Y SUS FAMILIARES (BREXIT)
     CARTA_INVITACION = "4037"  # POLICIA-CARTA DE INVITACIÓN
@@ -65,7 +66,6 @@ class OperationType(str, Enum):
     SOLICITUD_ASILO = "4078"  # POLICIA - SOLICITUD ASILO
     TOMA_HUELLAS = "4010"  # POLICIA-TOMA DE HUELLAS (EXPEDICIÓN DE TARJETA) Y RENOVACIÓN DE TARJETA DE LARGA DURACIÓN
     ASIGNACION_NIE = "4031"  # Asignación de N.I.E.
-
 
 class Office(str, Enum):
     # Barcelona
@@ -167,32 +167,32 @@ class CustomerProfile:
     province: Province = Province.BARCELONA
     operation_code: OperationType = OperationType.TOMA_HUELLAS
     country: str = "RUSIA"
-    year_of_birth: Optional[str] = None
+    year_of_birth: Optional[str] = ""   #YYYY
     offices: Optional[list] = field(default_factory=list)
     except_offices: Optional[list] = field(default_factory=list)
 
-    anticaptcha_api_key: Optional[str] = None
+    anticaptcha_api_key: Optional[str] = ""
     auto_captcha: bool = True
     auto_office: bool = True
     chrome_driver_path: str = "/usr/local/bin/chromedriver"
-    chrome_profile_name: Optional[str] = None
-    chrome_profile_path: Optional[str] = None
-    min_date: Optional[str] = None  # "dd/mm/yyyy"
-    max_date: Optional[str] = None  # "dd/mm/yyyy"
-    min_time: Optional[str] = None  # "hh:mm"
-    max_time: Optional[str] = None  # "hh:mm"
-    save_artifacts: bool = False
-    sms_webhook_token: Optional[str] = None
-    wait_exact_time: Optional[list] = None  # [[minute, second]]
+    chrome_profile_name: Optional[str] = ""
+    chrome_profile_path: Optional[str] = ""
+    min_date: Optional[str] = ""  # "dd/mm/yyyy"
+    max_date: Optional[str] = ""  # "dd/mm/yyyy"
+    min_time: Optional[str] = ""  # "hh:mm"
+    max_time: Optional[str] = ""  # "hh:mm"
+    save_artifacts: bool = False        
+    sms_webhook_token: Optional[str] = "4e5f76b7-76a7-45d9-937c-298eb1cd8aad"
+    wait_exact_time: Optional[list] = field(default_factory=list) # [[minute, second]]
     reason_or_type: str = "solicitud de asilo"
 
     # Internals
     bot_result: bool = False
     first_load: Optional[bool] = True  # Wait more on the first load to cache stuff
     log_settings: Optional[dict] = field(default_factory=lambda: {"stream": sys.stdout})
-    recaptcha_solver: Any = None
-    image_captcha_solver: Any = None
-    current_solver: Any = None
+    recaptcha_solver: Any = ""
+    image_captcha_solver: Any = ""
+    current_solver: Any = ""
 
     def __post_init__(self):
         if self.operation_code == OperationType.RECOGIDA_DE_TARJETA:
@@ -451,6 +451,26 @@ def autorizacion_de_regreso_step2(driver: webdriver, context: CustomerProfile):
 
     return True
 
+def autorizacion_de_arraigo_temp_exepcional(driver: webdriver, context: CustomerProfile):
+    try:
+        WebDriverWait(driver, DELAY).until(EC.presence_of_element_located((By.ID, "txtIdCitado")))
+    except TimeoutException:
+        logging.error("Timed out waiting for form to load")
+        return None
+
+    # Select doc type
+    if context.doc_type == DocType.PASSPORT:
+        driver.find_element(By.ID, "rdbTipoDocPas").send_keys(Keys.SPACE)
+    elif context.doc_type == DocType.NIE:
+        driver.find_element(By.ID, "rdbTipoDocNie").send_keys(Keys.SPACE)
+
+    # Enter doc number and name
+    element = driver.find_element(By.ID, "txtIdCitado")
+    element.send_keys(context.doc_value, Keys.TAB, context.name, Keys.TAB, context.year_of_birth, Keys.TAB, context.country)
+
+    return True
+
+
 
 def asignacion_nie_step2(driver: webdriver, context: CustomerProfile):
     try:
@@ -467,7 +487,7 @@ def asignacion_nie_step2(driver: webdriver, context: CustomerProfile):
 
     # Enter doc number, name and year of birth
     element = driver.find_element(By.ID, "txtIdCitado")
-    element.send_keys(context.doc_value, Keys.TAB, context.name, Keys.TAB, context.year_of_birth)
+    element.send_keys(context.doc_value +  Keys.TAB, context.name +  Keys.TAB, context.year_of_birth)
 
     # Select country
     select = Select(driver.find_element(By.ID, "txtPaisNac"))
@@ -640,7 +660,7 @@ def select_office(driver: webdriver, context: CustomerProfile):
                 except Exception as e:
                     logging.error(e)
                     if context.operation_code == OperationType.RECOGIDA_DE_TARJETA:
-                        return None
+                         return None
 
         for i in range(5):
             options = list(filter(lambda o: o.get_attribute("value") != "", select.options))
@@ -832,6 +852,9 @@ def cycle_cita(driver: webdriver, context: CustomerProfile, fast_forward_url, fa
         success = autorizacion_de_regreso_step2(driver, context)
     elif context.operation_code == OperationType.ASIGNACION_NIE:
         success = asignacion_nie_step2(driver, context)
+    # AUTORIZACIONES
+    elif context.operation_code == OperationType.AUTORIZACION_TEMP_EXCEPCIONALES_ARRAIGO:
+        success = autorizacion_de_arraigo_temp_exepcional(driver, context)
 
     if not success:
         return None
